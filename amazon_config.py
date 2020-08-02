@@ -2,7 +2,7 @@ from selenium import webdriver
 
 DIRECTORY = 'reports'
 NAME = 'PS4'
-CURRENCY = '$'
+CURRENCY = '€'
 MIN_PRICE = '22'
 MAX_PRICE = '44'
 FILTERS = {

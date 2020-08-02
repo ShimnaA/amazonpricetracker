@@ -13,11 +13,45 @@ from amazon_config import (
 )
 import time
 from selenium.webdriver.common.keys import Keys
-from bs4 import BeautifulSoup
+from selenium.common.exceptions import NoSuchElementException
+import json
+from datetime import datetime
+
 
 class GenerateReport:
-    def __init__(self):
-        pass
+    def __init__(self, file_name, filters, base_link, currency, data):
+        self.data = data
+        self.file_name = file_name
+        self.filters = filters
+        self.base_link = base_link
+        self.currency = currency
+        report = {
+            'title': self.file_name,
+            'date': self.get_now(),
+            'best_item': self.get_best_item(),
+            'currency': self.currency,
+            'filters': self.filters,
+            'base_link': self.base_link,
+            'products': self.data
+        }
+        print("Creating report...")
+        with open(f'{DIRECTORY}/{file_name}.json', 'w') as f:
+            json.dump(report, f)
+        print("Done...")
+
+    @staticmethod
+    def get_now():
+        now = datetime.now()
+        return now.strftime("%d/%m/%Y %H:%M:%S")
+
+    def get_best_item(self):
+        try:
+            return sorted(self.data, key=lambda k: k['price'])[0]
+        except Exception as e:
+            print(e)
+            print("Problem with sorting items")
+            return None
+
 
 class AmazonAPI:
     def __init__(self, search_term, filters, base_url, currency):
@@ -35,24 +69,91 @@ class AmazonAPI:
         print(f"Looking for {self.search_term} products")
         links = self.get_products_links()
         time.sleep(3)
-        print(f"Got {len(links)} number of links")
-        print("Getting info of products")
-        print(links)
+        print(f"Got {len(links)} links  of products")
         products = self.get_products_info(links)
         self.driver.quit()
+        return products
 
     def get_products_info(self, links):
         asins = self.get_asins(links)
         products = []
         for asin in asins:
             product = self.get_single_product_info(asin)
-
+            if product:
+                products.append(product)
+        return products
 
 
     def get_single_product_info(self, asin):
         print(f"Product ID: {asin} - getting data...")
         product_short_url = self.shorten_url(asin)
-        print(product_short_url)
+        self.driver.get(f'{product_short_url}?language=en_GB')
+        time.sleep(2)
+        title = self.get_title()
+        seller = self.get_seller()
+        price = self.get_price()
+        if title and seller and price:
+            print(f"{title}- {seller}-{price}")
+            product_info = {
+                'asin': asin,
+                'url': product_short_url,
+                'title': title,
+                'seller': seller,
+                'price': price
+            }
+            return product_info
+        return None
+
+    def get_title(self):
+        try:
+            return self.driver.find_element_by_id("productTitle").text
+        except Exception as e:
+            print(e)
+            print(f"Cant get title of a product {self.driver.current_url}")
+            return None
+
+    def get_seller(self):
+        try:
+            return self.driver.find_element_by_id("bylineInfo").text
+        except Exception as e:
+            print(e)
+            print(f"Cant get Seller of a product {self.driver.current_url}")
+            return None
+
+    def get_price(self):
+        price = None
+        try:
+            price = self.driver.find_element_by_id('priceblock_ourprice').text
+            price = self.convert_price(price)
+        except NoSuchElementException:
+            try:
+                availability = self.driver.find_element_by_id('availability').text
+                if 'Available' in availability:
+                    price = self.driver.find_element_by_class_name('olp-padding-right').text
+                    price = price[price.find(self.currency):]
+                    price = self.convert_price(price)
+            except Exception as e:
+                print(e)
+                print(f"Can't get price of a product - {self.driver.current_url}")
+                return None
+        except Exception as e:
+            print(e)
+            print(f"Can't get price of a product - {self.driver.current_url}")
+            return None
+        return price
+
+    def convert_price(self, price):
+        price = price.split(self.currency)[1]
+        try:
+            price = price.split("\n")[0] + "." + price.split("\n")[1]
+        except:
+            Exception()
+        try:
+            price = price.split(",")[0] + price.split(",")[1]
+        except:
+            Exception()
+        return float(price)
+
 
     def get_asins(self, links):
         return [self.get_asin(link) for link in links]
@@ -71,14 +172,16 @@ class AmazonAPI:
         time.sleep(2)
         self.driver.get(f'{self.driver.current_url}{self.price_filter}')
         time.sleep(2)
-        result_list = self.driver.find_elements_by_class_name("a-section.aok-relative.s-image-fixed-height")
-        print(len(result_list))
+
+        result_list = self.driver.find_elements_by_class_name('s-result-list')
         links = []
         try:
-            links = [res.find_element_by_xpath("..").get_attribute('href') for res in result_list]
+            results = result_list[0].find_elements_by_xpath(
+                "//div/span/div/div/div[2]/div[2]/div/div[1]/div/div/div[1]/h2/a")
+            links = [link.get_attribute('href') for link in results]
             return links
         except Exception as e:
-            print("Didnt get any product")
+            print("Didn't get any products...")
             print(e)
             return links
 
@@ -87,4 +190,5 @@ class AmazonAPI:
 if __name__ == '__main__':
     amazon = AmazonAPI(NAME, FILTERS, BASE_URL, CURRENCY)
     print(amazon.price_filter)
-    amazon.run()
+    data = amazon.run()
+    GenerateReport(NAME, FILTERS, BASE_URL, CURRENCY, data)
